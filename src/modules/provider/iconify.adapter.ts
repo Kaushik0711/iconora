@@ -118,6 +118,48 @@ export interface IconifyAdapterOptions {
   readonly baseUrl?: string;
   readonly defaultTtlMs?: number;
   readonly maxCacheEntries?: number;
+  readonly maxConcurrency?: number;
+  readonly maxRetries?: number;
+  readonly retryBaseDelayMs?: number;
+  readonly retryMaxDelayMs?: number;
+  readonly maxRetryAfterMs?: number;
+  readonly fetchFn?: typeof fetch;
+}
+
+/**
+ * Shared in-process concurrency limiter ensuring external provider requests
+ * are bounded and do not overwhelm upstream servers or trigger burst rate limits.
+ */
+export class ConcurrencyLimiter {
+  public readonly limit: number;
+  private activeCount = 0;
+  private readonly queue: Array<() => void> = [];
+
+  constructor(limit: number = 4) {
+    this.limit = limit;
+  }
+
+  public async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.activeCount >= this.limit) {
+      await new Promise<void>((resolve) => this.queue.push(resolve));
+    }
+    this.activeCount++;
+    try {
+      return await fn();
+    } finally {
+      this.activeCount--;
+      const next = this.queue.shift();
+      next?.();
+    }
+  }
+
+  public get pendingCount(): number {
+    return this.queue.length;
+  }
+
+  public get active(): number {
+    return this.activeCount;
+  }
 }
 
 /**
@@ -162,6 +204,14 @@ export class IconifyProvider implements IconSourceProvider {
   private readonly searchCache: BoundedCache<SearchResult>;
   private readonly svgCache: BoundedCache<string>;
 
+  private readonly limiter: ConcurrencyLimiter;
+  private readonly maxConcurrency: number;
+  private readonly maxRetries: number;
+  private readonly retryBaseDelayMs: number;
+  private readonly retryMaxDelayMs: number;
+  private readonly maxRetryAfterMs: number;
+  private readonly fetchFn: typeof fetch;
+
   constructor(options?: IconifyAdapterOptions) {
     this.baseUrl = (options?.baseUrl ?? 'https://api.iconify.design').replace(
       /\/$/,
@@ -171,6 +221,14 @@ export class IconifyProvider implements IconSourceProvider {
     const ttl = options?.defaultTtlMs ?? 15 * 60 * 1000; // 15 min TTL
     const maxEntries = options?.maxCacheEntries ?? 200;
 
+    this.maxConcurrency = options?.maxConcurrency ?? 4;
+    this.maxRetries = options?.maxRetries ?? 3;
+    this.retryBaseDelayMs = options?.retryBaseDelayMs ?? 200;
+    this.retryMaxDelayMs = options?.retryMaxDelayMs ?? 3000;
+    this.maxRetryAfterMs = options?.maxRetryAfterMs ?? 5000;
+    this.fetchFn = options?.fetchFn ?? fetch;
+
+    this.limiter = new ConcurrencyLimiter(this.maxConcurrency);
     this.collectionsCache = new BoundedCache({ maxEntries: 10, defaultTtlMs: ttl });
     this.collectionDetailCache = new BoundedCache({ maxEntries, defaultTtlMs: ttl });
     this.iconsDataCache = new BoundedCache({ maxEntries: 500, defaultTtlMs: ttl });
@@ -179,67 +237,165 @@ export class IconifyProvider implements IconSourceProvider {
   }
 
   /**
-   * Internal fetch wrapper handling network errors, abort signals, and HTTP status codes.
+   * Internal fetch wrapper bounded by concurrency limiter and resilient retry with
+   * exponential backoff, jitter, and Retry-After header respect.
    */
   private async executeFetch<T>(
     endpoint: string,
-    options?: { signal?: AbortSignal; parseJson?: boolean }
+    options?: { signal?: AbortSignal; parseJson?: boolean; maxRetries?: number }
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
-    let response: Response;
+    const maxRetries = options?.maxRetries ?? this.maxRetries;
 
-    try {
-      response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Accept: options?.parseJson !== false ? 'application/json' : '*/*',
-        },
-        signal: options?.signal,
-      });
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        throw new ProviderError('Request was aborted by caller', {
-          code: 'ABORTED',
-          url,
-          cause: err,
-        });
-      }
-      throw new NetworkError(
-        `Network request failed to ${url}: ${(err as Error)?.message || 'Unknown network error'}`,
-        url,
-        err
-      );
-    }
-
-    // Handle HTTP error statuses
-    if (!response.ok) {
-      if (response.status === 429) {
-        const retryAfterHeader = response.headers.get('retry-after');
-        const retrySeconds = retryAfterHeader ? parseInt(retryAfterHeader, 10) : undefined;
-        throw new RateLimitError(url, retrySeconds);
-      }
-      if (response.status === 404) {
-        throw new NotFoundError(endpoint, url);
-      }
-      throw new ProviderError(
-        `HTTP Error ${response.status} from provider endpoint: ${url}`,
-        {
-          code: 'UNKNOWN',
-          status: response.status,
-          url,
+    return this.limiter.run(async () => {
+      let attempt = 0;
+      while (true) {
+        if (options?.signal?.aborted) {
+          throw new ProviderError('Request was aborted by caller', {
+            code: 'ABORTED',
+            url,
+          });
         }
-      );
-    }
 
-    if (options?.parseJson === false) {
-      return (await response.text()) as unknown as T;
-    }
+        try {
+          let response: Response;
+          try {
+            response = await this.fetchFn(url, {
+              method: 'GET',
+              headers: {
+                Accept: options?.parseJson !== false ? 'application/json' : '*/*',
+              },
+              signal: options?.signal,
+            });
+          } catch (fetchErr: unknown) {
+            if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
+              throw new ProviderError('Request was aborted by caller', {
+                code: 'ABORTED',
+                url,
+                cause: fetchErr,
+              });
+            }
+            throw new NetworkError(
+              `Network request failed to ${url}: ${(fetchErr as Error)?.message || 'Unknown network error'}`,
+              url,
+              fetchErr
+            );
+          }
 
-    try {
-      return (await response.json()) as T;
-    } catch {
-      throw new InvalidResponseError('Failed to parse JSON response body', url);
-    }
+          if (!response.ok) {
+            if (response.status === 429) {
+              const retryAfterHeader = response.headers.get('retry-after');
+              const retrySeconds = retryAfterHeader ? parseInt(retryAfterHeader, 10) : undefined;
+              throw new RateLimitError(url, retrySeconds);
+            }
+            if (response.status === 404) {
+              // 404 is a permanent missing resource - do not retry
+              throw new NotFoundError(endpoint, url);
+            }
+            if (response.status === 400) {
+              // 400 is an invalid request shape - do not retry
+              throw new ProviderError(`HTTP Error 400 Bad Request: ${url}`, {
+                code: 'INVALID_INPUT',
+                status: 400,
+                url,
+              });
+            }
+            throw new ProviderError(
+              `HTTP Error ${response.status} from provider endpoint: ${url}`,
+              {
+                code: 'UNKNOWN',
+                status: response.status,
+                url,
+              }
+            );
+          }
+
+          if (options?.parseJson === false) {
+            return (await response.text()) as unknown as T;
+          }
+
+          try {
+            return (await response.json()) as T;
+          } catch {
+            throw new InvalidResponseError('Failed to parse JSON response body', url);
+          }
+        } catch (err: unknown) {
+          if (err instanceof Error && err.name === 'AbortError') {
+            throw new ProviderError('Request was aborted by caller', {
+              code: 'ABORTED',
+              url,
+              cause: err,
+            });
+          }
+
+          const isAborted = (err instanceof ProviderError && err.code === 'ABORTED') || options?.signal?.aborted;
+          if (isAborted) {
+            throw err;
+          }
+
+          // Permanent non-retryable errors
+          const isPermanent =
+            err instanceof NotFoundError ||
+            (err instanceof ProviderError && (err.code === 'INVALID_INPUT' || err.status === 400 || err.status === 404));
+
+          if (isPermanent) {
+            throw err;
+          }
+
+          // If retries are exhausted, bubble error up
+          if (attempt >= maxRetries) {
+            console.warn(
+              `[IconifyProvider] Upstream request exhausted all ${maxRetries} retries for endpoint "${endpoint}": ${(err as Error)?.message}`
+            );
+            throw err;
+          }
+
+          attempt++;
+
+          // Compute backoff delay
+          let delayMs: number;
+          if (err instanceof RateLimitError && typeof err.retryAfterSeconds === 'number' && !Number.isNaN(err.retryAfterSeconds)) {
+            const requestedMs = err.retryAfterSeconds * 1000;
+            if (requestedMs > this.maxRetryAfterMs) {
+              // Upstream specified a long backoff exceeding acceptable boundary
+              console.warn(
+                `[IconifyProvider] Rate limit Retry-After (${err.retryAfterSeconds}s) exceeds ceiling (${this.maxRetryAfterMs / 1000}s). Failing fast.`
+              );
+              throw err;
+            }
+            delayMs = Math.min(this.maxRetryAfterMs, requestedMs) + Math.floor(Math.random() * 200);
+          } else {
+            const expBackoff = this.retryBaseDelayMs * Math.pow(2, attempt - 1);
+            const jitter = Math.floor(Math.random() * this.retryBaseDelayMs);
+            delayMs = Math.min(this.retryMaxDelayMs, expBackoff + jitter);
+          }
+
+          console.warn(
+            `[IconifyProvider] Upstream request to "${endpoint}" failed with ${(err as Error)?.name || 'Error'} (attempt ${attempt}/${maxRetries}). Retrying in ${delayMs}ms...`
+          );
+
+          // Wait with cancellation awareness
+          await new Promise<void>((resolve, reject) => {
+            if (options?.signal?.aborted) {
+              return reject(new ProviderError('Request was aborted during retry backoff', { code: 'ABORTED', url }));
+            }
+            const timer = setTimeout(() => {
+              cleanup();
+              resolve();
+            }, delayMs);
+            const onAbort = () => {
+              cleanup();
+              reject(new ProviderError('Request was aborted during retry backoff', { code: 'ABORTED', url }));
+            };
+            const cleanup = () => {
+              clearTimeout(timer);
+              options?.signal?.removeEventListener('abort', onAbort);
+            };
+            options?.signal?.addEventListener('abort', onAbort);
+          });
+        }
+      }
+    });
   }
 
   /**
@@ -312,7 +468,7 @@ export class IconifyProvider implements IconSourceProvider {
             { signal: fetchSignal }
           );
         } catch (err) {
-          if (err instanceof NetworkError) {
+          if (err instanceof NetworkError || err instanceof RateLimitError) {
             const seedNames: string[] = [];
             for (const key of OFFLINE_SEED_ICONS.keys()) {
               if (key.startsWith(`${safePrefix}:`)) {
@@ -450,7 +606,7 @@ export class IconifyProvider implements IconSourceProvider {
           height?: number;
         }>(`/${safePrefix}.json?icons=${queryParam}`, { signal });
       } catch (err) {
-        if (err instanceof NetworkError) {
+        if (err instanceof NetworkError || err instanceof RateLimitError) {
           let foundAny = false;
           for (const entry of chunk) {
             const seed = OFFLINE_SEED_ICONS.get(`${safePrefix}:${entry.raw}`);

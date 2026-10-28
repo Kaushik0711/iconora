@@ -771,3 +771,143 @@ test('Continuation race condition: mid-request filter change invalidates pending
   assert.equal(isLoadingMore, false, 'Loading state must not be overwritten by old continuation');
   assert.equal(activeError, null, 'Error must not be set by stale continuation');
 });
+
+// ==============================================================================
+// 9. Recoverable Partial Failures and Targeted "Retry Failed" Semantics
+// ==============================================================================
+
+test('SearchService: throws UPSTREAM_BATCH_FAILURE when all requested browse sources fail', async () => {
+  const failingProvider = {
+    getCollection: async (prefix) => {
+      throw new Error(`Collection ${prefix} unavailable`);
+    },
+  };
+
+  await assert.rejects(
+    async () => {
+      await SearchService.search(
+        { sources: ['lucide', 'tabler'] },
+        { provider: failingProvider }
+      );
+    },
+    (err) => {
+      assert.ok(err instanceof ProviderError);
+      assert.equal(err.code, 'UPSTREAM_BATCH_FAILURE');
+      assert.ok(err.message.includes('lucide'));
+      assert.ok(err.message.includes('tabler'));
+      return true;
+    }
+  );
+});
+
+test('SearchService: "Retry Failed" queries target ONLY failed sources and merge without duplication', async () => {
+  // Step 1: Initial browse request where 'lucide' succeeds and 'tabler' fails
+  const initialProvider = {
+    getCollection: async (prefix) => {
+      if (prefix === 'tabler') {
+        throw new Error('Tabler 429 rate limit');
+      }
+      return {
+        prefix: 'lucide',
+        title: 'Lucide',
+        total: 2,
+        categories: {},
+        uncategorized: ['arrow-up', 'arrow-down'],
+        aliases: {},
+      };
+    },
+    getIconsData: async (prefix, names) => {
+      const map = new Map();
+      for (const name of names) {
+        map.set(name, {
+          body: '<path d="M0 0"/>',
+          width: 24,
+          height: 24,
+        });
+      }
+      return map;
+    },
+  };
+
+  const initialResult = await SearchService.search(
+    { sources: ['lucide', 'tabler'], limit: 10 },
+    { provider: initialProvider }
+  );
+
+  // Assert partial failure reported
+  assert.equal(initialResult.icons.length, 2);
+  assert.deepEqual(initialResult.partialFailures, ['tabler']);
+  assert.ok(initialResult.icons.every((i) => i.prefix === 'lucide'));
+
+  // Step 2: User clicks "Retry Failed" - request is scoped ONLY to failed sources ['tabler']
+  const retryRequestedSources = [];
+  const retryProvider = {
+    getCollection: async (prefix) => {
+      retryRequestedSources.push(prefix);
+      return {
+        prefix,
+        title: 'Tabler Icons',
+        total: 2,
+        categories: {},
+        uncategorized: ['check', 'x'],
+        aliases: {},
+      };
+    },
+    getIconsData: async (prefix, names) => {
+      const map = new Map();
+      for (const name of names) {
+        map.set(name, {
+          body: '<path d="M1 1"/>',
+          width: 24,
+          height: 24,
+        });
+      }
+      return map;
+    },
+  };
+
+  const retryResult = await SearchService.search(
+    { sources: initialResult.partialFailures, limit: 10 },
+    { provider: retryProvider }
+  );
+
+  // Verify only the failed source was queried
+  assert.deepEqual(retryRequestedSources, ['tabler'], 'Must only query the failed source');
+  assert.equal(retryResult.icons.length, 2);
+  assert.ok(retryResult.icons.every((i) => i.prefix === 'tabler'));
+  assert.equal(retryResult.partialFailures, undefined, 'Retry succeeded with 0 failures');
+
+  // Step 3: Simulate the UI merge operation in SearchExplorer.handleRetryFailed
+  const seen = new Set(initialResult.icons.map((i) => i.canonicalId));
+  const mergedIcons = [...initialResult.icons];
+  for (const icon of retryResult.icons) {
+    if (!seen.has(icon.canonicalId)) {
+      seen.add(icon.canonicalId);
+      mergedIcons.push(icon);
+    }
+  }
+
+  assert.equal(mergedIcons.length, 4, 'Must merge 2 lucide + 2 tabler icons');
+  assert.deepEqual(
+    mergedIcons.map((i) => i.canonicalId),
+    ['lucide:arrow-down', 'lucide:arrow-up', 'tabler:check', 'tabler:x']
+  );
+
+  // Deduplication check: if retry had overlap, duplicates must be safely rejected
+  const duplicateRetryResult = {
+    icons: [
+      { canonicalId: 'lucide:arrow-up', name: 'arrow-up', prefix: 'lucide' },
+      { canonicalId: 'tabler:star', name: 'star', prefix: 'tabler' },
+    ],
+  };
+  for (const icon of duplicateRetryResult.icons) {
+    if (!seen.has(icon.canonicalId)) {
+      seen.add(icon.canonicalId);
+      mergedIcons.push(icon);
+    }
+  }
+
+  // Only 'tabler:star' should be added; 'lucide:arrow-up' skipped
+  assert.equal(mergedIcons.length, 5);
+  assert.equal(mergedIcons[4].canonicalId, 'tabler:star');
+});

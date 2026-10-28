@@ -10,6 +10,7 @@ import { SearchEmptyState } from './SearchEmptyState';
 import type { SearchResponse, StyleFilter, LicenseFilter, SearchIconItem } from '@/modules/search/types';
 import { computeSearchKey, isContinuationValid, type ContinuationContext } from '@/modules/search';
 import { TaxonomyService } from '@/modules/taxonomy';
+import { showToast } from '@/modules/toast/toast';
 
 const QUICK_CATEGORIES = TaxonomyService.getAllCategories()
   .filter((category) => category.id !== 'all' && category.isSupported)
@@ -62,6 +63,7 @@ export function SearchExplorer() {
   const [error, setError] = useState<string | null>(null);
   const [isRateLimited, setIsRateLimited] = useState(false);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
+  const [isRetryingFailed, setIsRetryingFailed] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const mobileFilterToggleRef = useRef<HTMLButtonElement>(null);
@@ -352,6 +354,83 @@ export function SearchExplorer() {
     abortPendingContinuation();
     searchGenerationRef.current++;
     fetchIcons(searchInput, activeCategory, activeSources, activeStyle, activeLicense, page, cursor);
+  };
+
+  const handleRetryFailed = async () => {
+    if (isRetryingFailed || !data?.partialFailures || data.partialFailures.length === 0) {
+      return;
+    }
+
+    const failedToRetry = [...data.partialFailures];
+    setIsRetryingFailed(true);
+    const retryGeneration = searchGenerationRef.current;
+
+    try {
+      const params = new URLSearchParams();
+      if (searchInput.trim()) params.set('q', searchInput.trim());
+      if (activeCategory !== 'all') params.set('category', activeCategory);
+      params.set('source', failedToRetry.join(','));
+      if (activeStyle !== 'all') params.set('style', activeStyle);
+      if (activeLicense !== 'all') params.set('license', activeLicense);
+      params.set('page', '1');
+      params.set('limit', '32');
+
+      const res = await fetch(`/api/search?${params.toString()}`);
+      if (retryGeneration !== searchGenerationRef.current) return;
+
+      if (!res.ok) {
+        throw new Error(`Retry failed with status ${res.status}`);
+      }
+
+      const retryData: SearchResponse = await res.json();
+      if (retryGeneration !== searchGenerationRef.current) return;
+
+      const remainingFailed = retryData.partialFailures ? [...retryData.partialFailures] : [];
+      const recovered = failedToRetry.filter((p) => !remainingFailed.includes(p));
+
+      // Merge recovered icons without duplicates
+      if (retryData.icons && retryData.icons.length > 0) {
+        setAccumulatedIcons((prev) => {
+          const seen = new Set(prev.map((i) => i.canonicalId));
+          const uniqueNew = retryData.icons.filter((i) => !seen.has(i.canonicalId));
+          const merged = [...prev, ...uniqueNew];
+
+          setData((prevData) => {
+            if (!prevData) return retryData;
+            return {
+              ...prevData,
+              icons: isFilteredMode ? merged : [...(prevData.icons ?? []), ...uniqueNew],
+              total: typeof prevData.total === 'number' ? prevData.total + (retryData.total ?? 0) : prevData.total,
+              partialFailures: remainingFailed.length > 0 ? remainingFailed : undefined,
+            };
+          });
+
+          return merged;
+        });
+      } else {
+        setData((prevData) => {
+          if (!prevData) return retryData;
+          return {
+            ...prevData,
+            partialFailures: remainingFailed.length > 0 ? remainingFailed : undefined,
+          };
+        });
+      }
+
+      if (recovered.length > 0) {
+        showToast(`Successfully loaded ${recovered.join(', ')}`, 'success');
+      } else {
+        showToast('Upstream collections still unavailable. Please try again later.', 'info');
+      }
+    } catch {
+      if (retryGeneration === searchGenerationRef.current) {
+        showToast('Retry attempt failed. Please check connection and try again.', 'error');
+      }
+    } finally {
+      if (retryGeneration === searchGenerationRef.current) {
+        setIsRetryingFailed(false);
+      }
+    }
   };
 
   // Cursor-based load more for filtered continuation
@@ -723,10 +802,22 @@ export function SearchExplorer() {
                 </div>
                 <button
                   type="button"
-                  onClick={handleRetry}
-                  className="px-2.5 py-1 text-xs font-semibold rounded-md bg-[var(--color-bg-main)] border border-amber-300 hover:bg-amber-100/50 text-amber-900 dark:text-amber-200 transition-colors shrink-0 cursor-pointer"
+                  onClick={handleRetryFailed}
+                  disabled={isRetryingFailed}
+                  aria-busy={isRetryingFailed}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-md bg-[var(--color-bg-main)] border border-amber-300 hover:bg-amber-100/50 text-amber-900 dark:text-amber-200 transition-colors shrink-0 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
                 >
-                  Retry Failed
+                  {isRetryingFailed ? (
+                    <>
+                      <svg className="animate-spin h-3 w-3 text-amber-800 dark:text-amber-300" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      <span>Retrying...</span>
+                    </>
+                  ) : (
+                    'Retry Failed'
+                  )}
                 </button>
               </div>
             )}

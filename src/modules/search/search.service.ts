@@ -236,7 +236,11 @@ export class SearchService {
             return { source, names: filteredNames };
           } catch (error) {
             if (signal?.aborted) throw error;
+            const errObj = error as { message?: string; code?: string; status?: number };
             failedPrefixes.push(source.canonicalPrefix);
+            console.warn(
+              `[SearchService] Collection "${source.canonicalPrefix}" failed upstream load (${errObj.code || errObj.status || 'ERROR'}): ${errObj.message || 'unknown error'}`
+            );
             return { source, names: [] as string[] };
           }
         })
@@ -280,7 +284,11 @@ export class SearchService {
             return { prefix, data: await provider.getIconsData(prefix, names, signal) };
           } catch (error) {
             if (signal?.aborted) throw error;
+            const errObj = error as { message?: string; code?: string; status?: number };
             failedPrefixes.push(prefix);
+            console.warn(
+              `[SearchService] Icon batch for "${prefix}" failed upstream (${errObj.code || errObj.status || 'ERROR'}): ${errObj.message || 'unknown error'}`
+            );
             return { prefix, data: new Map() };
           }
         })

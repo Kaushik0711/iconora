@@ -20,6 +20,8 @@ import {
   NotFoundError,
   ProviderError,
   NetworkError,
+  RateLimitError,
+  ConcurrencyLimiter,
 } from '../src/modules/provider';
 
 // ==============================================================================
@@ -584,6 +586,226 @@ test('IconifyProvider: handles typed HTTP errors and cancellation', async () => 
       return true;
     }
   );
+});
+
+// ==============================================================================
+// 5b. Concurrency Limiter, Retries, Rate-Limiting & Backoff Cancellation
+// ==============================================================================
+
+test('ConcurrencyLimiter: strictly bounds active concurrent executions', async () => {
+  const limiter = new ConcurrencyLimiter(3);
+  let active = 0;
+  let maxActive = 0;
+
+  const tasks = Array.from({ length: 9 }, async (_, index) => {
+    return limiter.run(async () => {
+      active++;
+      if (active > maxActive) {
+        maxActive = active;
+      }
+      // Small delay to ensure queue interleaves
+      await new Promise((r) => setTimeout(r, 20));
+      active--;
+      return index;
+    });
+  });
+
+  const results = await Promise.all(tasks);
+  assert.equal(results.length, 9);
+  assert.ok(maxActive <= 3, `Max active (${maxActive}) must not exceed limit (3)`);
+  assert.equal(limiter.pendingCount, 0, 'Limiter queue must drain completely');
+  assert.equal(limiter.active, 0, 'Limiter active count must return to 0');
+});
+
+test('IconifyProvider: transient 503 error recovers on retry with mock fetchFn', async () => {
+  let callCount = 0;
+  const mockFetch = async () => {
+    callCount++;
+    if (callCount === 1) {
+      return new Response('Service Unavailable', { status: 503, statusText: 'Service Unavailable' });
+    }
+    return new Response(
+      JSON.stringify({
+        prefix: 'mock-transient',
+        title: 'Mock Transient',
+        total: 42,
+        uncategorized: ['check'],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+
+  const provider = new IconifyProvider({
+    baseUrl: 'https://mock.test',
+    fetchFn: mockFetch,
+    retryBaseDelayMs: 10,
+    retryMaxDelayMs: 50,
+    maxRetries: 2,
+  });
+
+  const result = await provider.getCollection('mock-transient');
+  assert.equal(callCount, 2, 'Must have called fetchFn twice (1 fail, 1 retry)');
+  assert.equal(result.prefix, 'mock-transient');
+  assert.equal(result.total, 42);
+});
+
+test('IconifyProvider: rate-limiting respects Retry-After header within configured bounds', async () => {
+  let callCount = 0;
+  const start = Date.now();
+  const mockFetch = async () => {
+    callCount++;
+    if (callCount === 1) {
+      return new Response('Too Many Requests', {
+        status: 429,
+        headers: { 'retry-after': '1' }, // 1 second backoff
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        prefix: 'mock-rl',
+        title: 'Mock RL',
+        total: 10,
+        uncategorized: ['arrow'],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+
+  const provider = new IconifyProvider({
+    baseUrl: 'https://mock.test',
+    fetchFn: mockFetch,
+    maxRetryAfterMs: 3000,
+    maxRetries: 2,
+  });
+
+  const result = await provider.getCollection('mock-rl');
+  const elapsed = Date.now() - start;
+
+  assert.equal(callCount, 2);
+  assert.equal(result.prefix, 'mock-rl');
+  assert.ok(elapsed >= 950, `Elapsed time (${elapsed}ms) must respect ~1000ms Retry-After`);
+});
+
+test('IconifyProvider: rate-limiting fails fast when Retry-After exceeds ceiling', async () => {
+  let callCount = 0;
+  const mockFetch = async () => {
+    callCount++;
+    return new Response('Too Many Requests', {
+      status: 429,
+      headers: { 'retry-after': '1800' }, // 30 minutes Cloudflare block
+    });
+  };
+
+  const provider = new IconifyProvider({
+    baseUrl: 'https://mock.test',
+    fetchFn: mockFetch,
+    maxRetryAfterMs: 2000, // Ceiling 2 seconds
+    maxRetries: 3,
+  });
+
+  await assert.rejects(
+    async () => {
+      await provider.getCollection('mock-long-rl');
+    },
+    (err) => {
+      assert.ok(err instanceof RateLimitError);
+      assert.equal(err.code, 'RATE_LIMITED');
+      assert.equal(err.retryAfterSeconds, 1800);
+      return true;
+    }
+  );
+
+  // Must not have retried 3 times because ceiling was exceeded
+  assert.equal(callCount, 1, 'Must fail fast on excessive Retry-After without retrying');
+});
+
+test('IconifyProvider: permanent errors (404 and 400) are NOT retried', async () => {
+  let notFoundCalls = 0;
+  const mock404Fetch = async () => {
+    notFoundCalls++;
+    return new Response('Not Found', { status: 404 });
+  };
+
+  const provider404 = new IconifyProvider({
+    baseUrl: 'https://mock.test',
+    fetchFn: mock404Fetch,
+    maxRetries: 3,
+    retryBaseDelayMs: 10,
+  });
+
+  await assert.rejects(
+    async () => {
+      await provider404.getCollection('does-not-exist');
+    },
+    (err) => {
+      assert.ok(err instanceof NotFoundError);
+      assert.equal(err.code, 'NOT_FOUND');
+      return true;
+    }
+  );
+  assert.equal(notFoundCalls, 1, '404 must not trigger retries');
+
+  let badRequestCalls = 0;
+  const mock400Fetch = async () => {
+    badRequestCalls++;
+    return new Response('Bad Request', { status: 400 });
+  };
+
+  const provider400 = new IconifyProvider({
+    baseUrl: 'https://mock.test',
+    fetchFn: mock400Fetch,
+    maxRetries: 3,
+    retryBaseDelayMs: 10,
+  });
+
+  await assert.rejects(
+    async () => {
+      await provider400.getCollection('bad-query');
+    },
+    (err) => {
+      assert.ok(err instanceof ProviderError);
+      assert.equal(err.code, 'INVALID_INPUT');
+      return true;
+    }
+  );
+  assert.equal(badRequestCalls, 1, '400 must not trigger retries');
+});
+
+test('IconifyProvider: aborted signal cancels in-flight retry backoff immediately', async () => {
+  let callCount = 0;
+  const mockFetch = async () => {
+    callCount++;
+    return new Response('Error 500', { status: 500 });
+  };
+
+  const provider = new IconifyProvider({
+    baseUrl: 'https://mock.test',
+    fetchFn: mockFetch,
+    retryBaseDelayMs: 5000, // 5 second backoff delay
+    maxRetries: 3,
+  });
+
+  const controller = new AbortController();
+  const startTime = Date.now();
+
+  setTimeout(() => {
+    controller.abort();
+  }, 40);
+
+  await assert.rejects(
+    async () => {
+      await provider.getCollection('aborted-retry', controller.signal);
+    },
+    (err) => {
+      assert.ok(err instanceof ProviderError);
+      assert.equal(err.code, 'ABORTED');
+      return true;
+    }
+  );
+
+  const duration = Date.now() - startTime;
+  assert.ok(duration < 500, `Abort took ${duration}ms; must terminate promptly without waiting for 5000ms backoff`);
+  assert.equal(callCount, 1, 'Must stop retry loop upon abort');
 });
 
 // ==============================================================================
