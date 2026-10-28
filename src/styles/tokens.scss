@@ -1,0 +1,90 @@
+// ==============================================================================
+// IconHub Design System Tokens (SCSS Source of Truth)
+// Values defined in accordance with the project specification
+// ==============================================================================
+
+// SCSS Variables
+$color-purple-primary: #6045FF;
+$color-purple-hover: #4E34E8;
+$color-purple-light: #F0EDFF;
+$color-navy-heading: #111831;
+$color-bg-main: #FFFFFF;
+$color-bg-secondary: #F8F9FF;
+$color-text-body: #53617D;
+$color-text-muted: #5E6C84;
+$color-border-subtle: #E8EAF3;
+
+// Spacing & Border Radii
+$radius-sm: 6px;
+$radius-md: 10px;
+$radius-lg: 16px;
+$radius-full: 9999px;
+
+// Shadows
+$shadow-subtle: 0 1px 3px rgba(17, 24, 49, 0.05);
+$shadow-card: 0 4px 20px -2px rgba(17, 24, 49, 0.06);
+
+// CSS Custom Properties Export
+:root {
+  --color-primary: #{$color-purple-primary};
+  --color-primary-hover: #{$color-purple-hover};
+  --color-primary-light: #{$color-purple-light};
+  --color-heading: #{$color-navy-heading};
+  --color-bg-main: #{$color-bg-main};
+  --color-bg-secondary: #{$color-bg-secondary};
+  --color-text-body: #{$color-text-body};
+  --color-text-muted: #{$color-text-muted};
+  --color-border: #{$color-border-subtle};
+
+  --radius-sm: #{$radius-sm};
+  --radius-md: #{$radius-md};
+  --radius-lg: #{$radius-lg};
+  --radius-full: #{$radius-full};
+
+  --shadow-subtle: #{$shadow-subtle};
+  --shadow-card: #{$shadow-card};
+
+  // Keyboard accessibility
+  --focus-ring: 0 0 0 3px rgba(96, 69, 255, 0.35);
+}
+
+// Dark theme token overrides
+:root.dark,
+[data-theme='dark'] {
+  --color-primary: #7551FF;
+  --color-primary-hover: #8666FF;
+  --color-primary-light: rgba(117, 81, 255, 0.16);
+  --color-heading: #F8FAFC;
+  --color-bg-main: #0B0F19;
+  --color-bg-secondary: #111827;
+  --color-text-body: #94A3B8;
+  --color-text-muted: #8295AB;
+  --color-border: #1E293B;
+
+  --shadow-subtle: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.45);
+
+  --focus-ring: 0 0 0 3px rgba(117, 81, 255, 0.5);
+}
+
+// System-preference dark mode when not explicitly overridden
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --color-primary: #7551FF;
+    --color-primary-hover: #8666FF;
+    --color-primary-light: rgba(117, 81, 255, 0.16);
+    --color-heading: #F8FAFC;
+    --color-bg-main: #0B0F19;
+    --color-bg-secondary: #111827;
+    --color-text-body: #94A3B8;
+    --color-text-muted: #8295AB;
+    --color-border: #1E293B;
+
+    --shadow-subtle: 0 1px 3px rgba(0, 0, 0, 0.35);
+    --shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.45);
+
+    --focus-ring: 0 0 0 3px rgba(117, 81, 255, 0.5);
+  }
+}
+
+
