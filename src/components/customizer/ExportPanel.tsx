@@ -5,6 +5,7 @@ import type { ExportFormat, PngResolution } from '@/modules/customizer/types';
 import type { ExportMetadataOptions } from '@/modules/customizer/exporter';
 import {
   generateStandaloneSvg,
+  generateCleanSvg,
   generateReactJsx,
   generateHtmlSnippet,
   generateCssSnippet,
@@ -30,7 +31,7 @@ export function ExportPanel({ svgMarkup, metadata }: ExportPanelProps) {
     (format: ExportFormat): string => {
       switch (format) {
         case 'svg':
-          return generateStandaloneSvg(svgMarkup, metadata);
+          return generateCleanSvg(svgMarkup);
         case 'react':
           return generateReactJsx(svgMarkup, metadata);
         case 'html':

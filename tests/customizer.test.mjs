@@ -17,6 +17,7 @@ import {
   generateReactJsx,
   generateCssSnippet,
   generateStandaloneSvg,
+  generateCleanSvg,
   generateHtmlSnippet,
   encodeSvgForDataUri,
 } from '../src/modules/customizer/exporter';
@@ -667,6 +668,21 @@ test('generateStandaloneSvg: produces valid XML declaration and standalone root'
 
   assert.ok(standalone.startsWith('<?xml version="1.0" encoding="UTF-8"?>'));
   assert.ok(standalone.includes('<svg xmlns="http://www.w3.org/2000/svg"'));
+});
+
+test('generateCleanSvg: extracts only <svg>...</svg> markup without XML declaration or comments', () => {
+  const source = SourceRegistry.getByPrefix('lucide');
+  const rawSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 12h14" /></svg>';
+  const standalone = generateStandaloneSvg(rawSvg, { prefix: 'lucide', name: 'arrow-right', source });
+
+  const clean = generateCleanSvg(standalone);
+
+  assert.ok(clean.startsWith('<svg'), 'Must begin strictly with <svg');
+  assert.ok(clean.endsWith('</svg>'), 'Must end strictly with </svg>');
+  assert.equal(clean.includes('<?xml'), false, 'Must not include XML declaration');
+  assert.equal(clean.includes('<!--'), false, 'Must not include comments');
+  assert.equal(clean.includes('```'), false, 'Must not include Markdown fences');
+  assert.ok(clean.includes('<path d="M5 12h14" />'), 'Must preserve path geometry');
 });
 
 test('generateHtmlSnippet: produces clean inline HTML snippet with header comment', () => {

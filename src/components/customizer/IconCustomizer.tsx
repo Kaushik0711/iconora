@@ -10,6 +10,7 @@ import type {
 import type { IconItemData } from '@/modules/provider/types';
 import type { CuratedSource } from '@/modules/registry/types';
 import { buildCustomizedSvg } from '@/modules/customizer/svg-builder';
+import { generateCleanSvg } from '@/modules/customizer/exporter';
 import { useIconFavorites, recordRecentlyViewedIcon } from '@/modules/storage';
 import { showToast } from '@/modules/toast/toast';
 import { PreviewCanvas } from './PreviewCanvas';
@@ -111,7 +112,7 @@ export function IconCustomizer({
   // Quick Copy SVG Handler
   const handleQuickCopySvg = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(safeSvg);
+      await navigator.clipboard.writeText(generateCleanSvg(safeSvg));
       showToast('Copied customized SVG to clipboard!', 'success');
     } catch {
       showToast('Failed to copy SVG', 'error');

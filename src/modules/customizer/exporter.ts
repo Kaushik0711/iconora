@@ -172,6 +172,21 @@ export function generateCssSnippet(
 }
 
 /**
+ * Extracts clean, standalone <svg>...</svg> markup without XML declaration,
+ * metadata comments, or markdown fences.
+ */
+export function generateCleanSvg(svgString: string): string {
+  let clean = svgString.replace(/<\?xml[\s\S]*?\?>/gi, '').trim();
+  clean = clean.replace(/<!--[\s\S]*?-->/gi, '').trim();
+  const svgStartIndex = clean.indexOf('<svg');
+  const svgEndIndex = clean.lastIndexOf('</svg>');
+  if (svgStartIndex !== -1 && svgEndIndex !== -1) {
+    clean = clean.substring(svgStartIndex, svgEndIndex + 6).trim();
+  }
+  return clean;
+}
+
+/**
  * Generates standalone SVG file content.
  */
 export function generateStandaloneSvg(

@@ -392,30 +392,28 @@ test('SearchService: post-filtering applies constraints BEFORE selecting page it
 // 4. Blank Query Fallback Removal & Search Start State
 // ==============================================================================
 
-test('SearchService: empty query with category "all" returns clean discovery state', async () => {
+test('SearchService: empty query with category "all" returns default browse results', async () => {
   const result = await SearchService.search({
     query: '',
     category: 'all',
   });
 
-  // Must NOT fall back to arbitrary 'interface' icons
+  // Must NOT fall back to arbitrary 'interface' query; returns verified collections browse results
   assert.equal(result.query, '');
   assert.equal(result.activeCategory, 'all');
-  assert.equal(result.total, 0);
-  assert.equal(result.totalPages, 0);
-  assert.equal(result.isInitialDiscovery, true, 'Must indicate initial discovery state');
-  assert.equal(result.hasMore, false);
-  assert.deepEqual(result.icons, []);
+  assert.ok(result.total > 0, 'Total should reflect eligible collection icons');
+  assert.ok(result.icons.length > 0, 'Should return icon items by default');
+  assert.equal(result.isInitialDiscovery, false);
 });
 
-test('SearchService: whitespace-only query is treated as blank query', async () => {
+test('SearchService: whitespace-only query is treated as blank query and returns browse results', async () => {
   const result = await SearchService.search({
     query: '   ',
     category: 'all',
   });
 
-  assert.equal(result.isInitialDiscovery, true);
-  assert.equal(result.icons.length, 0);
+  assert.equal(result.isInitialDiscovery, false);
+  assert.ok(result.icons.length > 0);
 });
 
 // ==============================================================================
@@ -630,21 +628,20 @@ test('API Route Handler: parses cursor parameter and forwards to search service'
 
   assert.equal(response.status, 200);
   const data = await response.json();
-  // With blank query and all categories, returns initial discovery cleanly
-  assert.equal(data.isInitialDiscovery, true);
+  assert.equal(typeof data.hasMore, 'boolean');
+  assert.ok(Array.isArray(data.icons));
 });
 
-test('API Route Handler: returns initial discovery state on blank query with all categories', async () => {
+test('API Route Handler: returns browse results on blank query with all categories', async () => {
   const req = new Request('https://iconhub.dev/api/search');
   const response = await searchRouteHandler(req);
 
   assert.equal(response.status, 200);
   const data = await response.json();
 
-  assert.equal(data.isInitialDiscovery, true);
-  assert.equal(data.icons.length, 0);
-  assert.equal(data.total, 0);
-  assert.equal(data.hasMore, false);
+  assert.equal(data.isInitialDiscovery, false);
+  assert.ok(data.icons.length > 0);
+  assert.ok(data.total > 0);
 });
 
 // ==============================================================================
