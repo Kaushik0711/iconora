@@ -137,52 +137,72 @@ export function ExportPanel({ svgMarkup, metadata }: ExportPanelProps) {
   };
 
   return (
-    <div className="flex flex-col rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden shadow-xs">
-      {/* Tab Navigation */}
-      <div
-        role="tablist"
-        aria-label="Export format selection"
-        className="flex items-center gap-1 p-2 border-b border-[var(--color-border)] bg-[var(--color-bg-main)] overflow-x-auto no-scrollbar"
-      >
-        {(['svg', 'react', 'html', 'css', 'png'] as ExportFormat[]).map((tab) => (
-          <button
-            key={tab}
-            role="tab"
-            id={`tab-${tab}`}
-            aria-selected={activeTab === tab}
-            aria-controls={`panel-${tab}`}
-            onClick={() => setActiveTab(tab)}
-            className={`min-h-[40px] flex items-center justify-center px-3 py-1.5 text-xs font-semibold rounded-lg capitalize transition-colors whitespace-nowrap ${
-              activeTab === tab
-                ? 'bg-[var(--color-primary)] text-white shadow-xs'
-                : 'text-[var(--color-text-muted)] hover:text-[var(--color-heading)] hover:bg-[var(--color-bg-secondary)]'
-            }`}
-          >
-            {tab === 'react' ? 'React JSX' : tab.toUpperCase()}
-          </button>
-        ))}
+    <div className="flex flex-col rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-main)] overflow-hidden shadow-xs">
+      {/* Tab Navigation Header Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-main)] gap-2 p-2 sm:px-3">
+        <div
+          role="tablist"
+          aria-label="Export format selection"
+          className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5"
+        >
+          {(['svg', 'react', 'html', 'css', 'png'] as ExportFormat[]).map((tab) => (
+            <button
+              key={tab}
+              role="tab"
+              id={`tab-${tab}`}
+              aria-selected={activeTab === tab}
+              aria-controls={`panel-${tab}`}
+              onClick={() => setActiveTab(tab)}
+              className={`min-h-[40px] flex items-center justify-center px-3.5 py-1.5 text-xs font-semibold rounded-xl capitalize transition-all whitespace-nowrap cursor-pointer ${
+                activeTab === tab
+                  ? 'bg-[var(--color-primary)] text-white shadow-xs font-bold'
+                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-heading)] hover:bg-[var(--color-bg-secondary)]'
+              }`}
+            >
+              {tab === 'react' ? 'React JSX' : tab.toUpperCase()}
+            </button>
+          ))}
+        </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        {/* Action Buttons in Header */}
+        <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
           {activeTab !== 'png' ? (
             <>
               <button
                 type="button"
                 onClick={handleCopy}
-                className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] text-xs font-semibold rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-heading)] hover:bg-[var(--color-bg-main)] transition-colors cursor-pointer"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 min-h-[40px] text-xs font-semibold rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-heading)] hover:bg-[var(--color-bg-main)] hover:border-[var(--color-primary)]/40 transition-all cursor-pointer shadow-2xs"
               >
                 {copied ? (
-                  <span className="text-emerald-600 font-bold">✓ Copied</span>
+                  <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                    <span>Copied!</span>
+                  </span>
                 ) : (
-                  <span>Copy Code</span>
+                  <span className="flex items-center gap-1.5">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--color-text-muted)]">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                    </svg>
+                    <span>Copy Code</span>
+                  </span>
                 )}
               </button>
+
               {activeTab === 'svg' && (
                 <button
                   type="button"
                   onClick={handleDownloadSvg}
-                  className="px-3 py-1.5 min-h-[40px] flex items-center justify-center text-xs font-semibold rounded-lg bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)] transition-colors cursor-pointer"
+                  className="px-4 py-1.5 min-h-[40px] flex items-center justify-center gap-1.5 text-xs font-bold rounded-xl bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)] transition-all cursor-pointer shadow-xs active:scale-[0.98]"
                 >
-                  Download .svg
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  <span>Download .svg</span>
                 </button>
               )}
             </>
@@ -197,19 +217,19 @@ export function ExportPanel({ svgMarkup, metadata }: ExportPanelProps) {
             role="tabpanel"
             id="panel-png"
             aria-labelledby="tab-png"
-            className="flex flex-col gap-4 max-w-md"
+            className="flex flex-col gap-4 max-w-lg"
           >
             <div>
-              <h3 className="text-sm font-semibold text-[var(--color-heading)] mb-1">
-                PNG Raster Export
+              <h3 className="text-sm font-bold text-[var(--color-heading)] mb-1">
+                PNG Bitmap Export
               </h3>
               <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
-                Render crisp raster PNGs at standard resolutions with transparency preserved.
+                Render crisp raster PNGs at standard resolutions with transparency and custom container frames preserved.
               </p>
             </div>
 
             <div className="flex flex-col gap-2">
-              <label className="text-xs font-medium text-[var(--color-heading)]">Resolution</label>
+              <label className="text-xs font-semibold text-[var(--color-heading)]">Canvas Resolution</label>
               <div className="grid grid-cols-4 gap-2">
                 {PNG_RESOLUTIONS.map((res) => (
                   <button
@@ -217,10 +237,10 @@ export function ExportPanel({ svgMarkup, metadata }: ExportPanelProps) {
                     type="button"
                     onClick={() => setPngResolution(res)}
                     aria-pressed={pngResolution === res}
-                    className={`py-2 text-xs font-mono rounded-lg border transition-colors ${
+                    className={`py-2 text-xs font-mono rounded-xl border transition-all cursor-pointer text-center ${
                       pngResolution === res
-                        ? 'border-[var(--color-primary)] bg-[var(--color-primary-light)] text-[var(--color-primary)] font-semibold'
-                        : 'border-[var(--color-border)] bg-[var(--color-bg-main)] text-[var(--color-text-muted)] hover:text-[var(--color-heading)]'
+                        ? 'border-[var(--color-primary)] bg-[var(--color-primary)] text-white font-bold shadow-xs'
+                        : 'border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text-body)] hover:text-[var(--color-heading)] hover:border-[var(--color-primary)]/40'
                     }`}
                   >
                     {res}px
@@ -230,16 +250,21 @@ export function ExportPanel({ svgMarkup, metadata }: ExportPanelProps) {
             </div>
 
             {downloadError && (
-              <p className="text-xs text-rose-600 font-medium">{downloadError}</p>
+              <p className="text-xs text-rose-600 dark:text-rose-400 font-medium">{downloadError}</p>
             )}
 
             <button
               type="button"
               disabled={isDownloadingPng}
               onClick={handleDownloadPng}
-              className="mt-2 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-[var(--color-primary)] text-white font-semibold text-xs hover:bg-[var(--color-primary-hover)] disabled:opacity-50 transition-colors shadow-xs"
+              className="mt-2 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-[var(--color-primary)] text-white font-bold text-xs hover:bg-[var(--color-primary-hover)] disabled:opacity-50 transition-all shadow-xs cursor-pointer active:scale-[0.98]"
             >
-              {isDownloadingPng ? 'Rasterizing PNG...' : `Download ${pngResolution} × ${pngResolution} PNG`}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              <span>{isDownloadingPng ? 'Rasterizing PNG...' : `Download ${pngResolution} × ${pngResolution} PNG`}</span>
             </button>
           </div>
         ) : (
@@ -249,7 +274,7 @@ export function ExportPanel({ svgMarkup, metadata }: ExportPanelProps) {
             aria-labelledby={`tab-${activeTab}`}
             className="relative"
           >
-            <pre className="p-4 rounded-xl bg-slate-950 text-slate-200 font-mono text-2xs sm:text-xs overflow-x-auto max-h-[320px] leading-relaxed border border-slate-800">
+            <pre className="p-4 rounded-xl bg-slate-950 text-slate-200 font-mono text-2xs sm:text-xs overflow-x-auto max-h-[320px] leading-relaxed border border-slate-800 shadow-inner">
               <code>{activeSnippet}</code>
             </pre>
           </div>
@@ -258,4 +283,3 @@ export function ExportPanel({ svgMarkup, metadata }: ExportPanelProps) {
     </div>
   );
 }
-

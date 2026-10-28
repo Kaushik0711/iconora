@@ -193,141 +193,20 @@ export class SearchService {
       };
     }
 
-    // 2. Default browse mode: enumerate verified collections instead of leaving
-    // the initial Icon Sets page empty until a visitor submits a query.
+    // 2. Blank query with all categories returns clean initial discovery state
     if (!userQuery && activeCategory === 'all') {
-      let browseSources = SourceRegistry.getAllSources();
-
-      if (params.sources?.length) {
-        const selected = new Set(params.sources.map((prefix) => prefix.toLowerCase()));
-        browseSources = browseSources.filter((source) => selected.has(source.canonicalPrefix));
-      }
-
-      if (activeStyle !== 'all') {
-        browseSources = browseSources.filter((source) =>
-          isStyleSupportedByPrefix(source.canonicalPrefix, activeStyle)
-        );
-      }
-
-      if (activeLicense === 'commercial') {
-        browseSources = browseSources.filter((source) => source.license.commercialUse === 'allowed');
-      } else if (activeLicense === 'no-attribution') {
-        browseSources = browseSources.filter((source) => source.license.attributionTerms === 'not_required');
-      } else if (activeLicense === 'trademark-safe') {
-        browseSources = browseSources.filter((source) => !source.trademarkNotice);
-      }
-
-      const failedPrefixes: string[] = [];
-      const collections = await Promise.all(
-        browseSources.map(async (source) => {
-          try {
-            const detail = await provider.getCollection(source.canonicalPrefix, signal);
-            const names = new Set<string>();
-            for (const categoryNames of Object.values(detail.categories)) {
-              for (const name of categoryNames) names.add(name);
-            }
-            for (const name of detail.uncategorized) names.add(name);
-            for (const alias of Object.keys(detail.aliases)) names.add(alias);
-
-            const filteredNames = Array.from(names)
-              .filter((name) => activeStyle === 'all' || classifyIconStyle(source.canonicalPrefix, name) === activeStyle)
-              .sort((a, b) => a.localeCompare(b));
-
-            return { source, names: filteredNames };
-          } catch (error) {
-            if (signal?.aborted) throw error;
-            failedPrefixes.push(source.canonicalPrefix);
-            return { source, names: [] as string[] };
-          }
-        })
-      );
-
-      if (signal?.aborted) {
-        throw new DOMException('The operation was aborted', 'AbortError');
-      }
-      if (failedPrefixes.length === browseSources.length && browseSources.length > 0) {
-        throw new ProviderError(
-          `Failed to load verified icon collections: ${failedPrefixes.join(', ')}`,
-          { code: 'UPSTREAM_BATCH_FAILURE' }
-        );
-      }
-
-      // Interleave sorted names so the first view represents all eligible libraries
-      // instead of being dominated by whichever collection sorts first.
-      const orderedItems: Array<{ prefix: string; name: string }> = [];
-      const maxCollectionLength = collections.reduce((max, collection) => Math.max(max, collection.names.length), 0);
-      for (let index = 0; index < maxCollectionLength; index++) {
-        for (const collection of collections) {
-          const name = collection.names[index];
-          if (name) orderedItems.push({ prefix: collection.source.canonicalPrefix, name });
-        }
-      }
-
-      const page = Math.max(1, params.page ?? 1);
-      const limit = Math.min(64, Math.max(1, params.limit ?? 32));
-      const start = Math.max(0, params.cursor ?? (page - 1) * limit);
-      const pageItems = orderedItems.slice(start, start + limit);
-      const namesByPrefix = new Map<string, string[]>();
-      for (const item of pageItems) {
-        const names = namesByPrefix.get(item.prefix) ?? [];
-        names.push(item.name);
-        namesByPrefix.set(item.prefix, names);
-      }
-
-      const iconBatches = await Promise.all(
-        Array.from(namesByPrefix, async ([prefix, names]) => {
-          try {
-            return { prefix, data: await provider.getIconsData(prefix, names, signal) };
-          } catch (error) {
-            if (signal?.aborted) throw error;
-            failedPrefixes.push(prefix);
-            return { prefix, data: new Map() };
-          }
-        })
-      );
-      const dataByPrefix = new Map(iconBatches.map((batch) => [batch.prefix, batch.data]));
-      const sourceByPrefix = new Map(browseSources.map((source) => [source.canonicalPrefix, source]));
-      const icons: SearchIconItem[] = [];
-
-      for (const item of pageItems) {
-        const source = sourceByPrefix.get(item.prefix);
-        const icon = dataByPrefix.get(item.prefix)?.get(item.name);
-        if (!source || !icon?.body) continue;
-        const width = icon.width || source.defaultViewBox.width;
-        const height = icon.height || source.defaultViewBox.height;
-        icons.push({
-          canonicalId: `${item.prefix}:${item.name}` as `${string}:${string}`,
-          prefix: item.prefix,
-          name: item.name,
-          body: icon.body,
-          width,
-          height,
-          viewBox: `0 0 ${width} ${height}`,
-          collectionName: source.displayName,
-          licenseSpdx: source.license.spdxId,
-          attributionRequired: source.license.attributionTerms === 'required',
-          hasTrademarkCaveat: Boolean(source.trademarkNotice),
-          styleVariant: classifyIconStyle(item.prefix, item.name),
-        });
-      }
-
-      const total = orderedItems.length;
-      const totalPages = Math.ceil(total / limit);
-      const nextCursor = start + pageItems.length;
       return {
-        icons,
-        total,
-        page,
-        limit,
-        totalPages,
+        icons: [],
+        total: 0,
+        page: params.page ?? 1,
+        limit: params.limit ?? 32,
+        totalPages: 0,
         query: '',
         activeCategory: 'all',
-        isInitialDiscovery: false,
+        isInitialDiscovery: true,
         activeStyle,
         activeLicense,
-        hasMore: nextCursor < total,
-        nextCursor: nextCursor < total ? nextCursor : undefined,
-        partialFailures: failedPrefixes.length ? Array.from(new Set(failedPrefixes)) : undefined,
+        hasMore: false,
       };
     }
 
